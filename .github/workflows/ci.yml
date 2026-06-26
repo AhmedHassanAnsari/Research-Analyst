@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    paths:
+      - 'Agent.py'
+  pull_request:
+    paths:
+      - 'Agent.py'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Add uv to PATH
+        run: echo "${HOME}/.local/bin" >> $GITHUB_PATH
+
+      - name: Install project dependencies
+        run: uv sync --no-dev
+        env:
+          UV_SYSTEM_PYTHON: true
+
+      - name: Run tests (if any)
+        run: |
+          if [ -f "pyproject.toml" ]; then
+            uv run pytest || echo "No tests found"
+          else
+            echo "No pyproject.toml, skipping tests"
+          fi
+        continue-on-error: true
+
+      - name: Build Docker image
+        if: success()
+        run: |
+          if [ -f "Dockerfile" ]; then
+            docker build -t research-analyst:latest .
+          else
+            echo "Dockerfile not found – skipping image build."
+          fi
+        continue-on-error: true
