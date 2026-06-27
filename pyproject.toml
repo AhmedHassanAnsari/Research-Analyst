@@ -14,4 +14,5 @@ dependencies = [
     "httpx>=0.28.1",
     "tavily-python>=0.7.26",
     "fastapi[standard]>=0.138.1",
+    "chainlit>=2.11.1",
 ]

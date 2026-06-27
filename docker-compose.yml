@@ -1,4 +1,4 @@
-version: "3.9"
+
 
 services:
 
@@ -11,14 +11,15 @@ services:
       - "8001:8001"          # MCP server HTTP endpoint
     environment:
       PYTHONUNBUFFERED: "1"
+      TAVILY_API_KEY: ${TAVILY_API_KEY}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/mcp')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',8001)); s.close()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-  # ── Research Agent ─────────────────────────────────────────────────────────
+  # ── Research Agent (FastAPI) ───────────────────────────────────────────────
   agent:
     image: ghcr.io/ahmedhassanansari/research-analyst-agent:latest
     container_name: research-agent
@@ -26,8 +27,8 @@ services:
     depends_on:
       mcp-server:
         condition: service_healthy
-    ports:
-      - "8000:8000"          # FastAPI endpoint
+    expose:
+      - "8000"               # FastAPI endpoint — internal only, reached via the UI
     environment:
       # Runtime secrets – supply via a .env file or docker compose --env-file
       GEMINI_API_KEY: ${GEMINI_API_KEY}
@@ -40,6 +41,20 @@ services:
     # Mount .env file if it exists locally (commented out for prod; use secrets instead)
     # env_file:
     #   - .env
+
+  # ── Chainlit UI (entry point) ──────────────────────────────────────────────
+  ui:
+    image: ghcr.io/ahmedhassanansari/my-ui-image:latest
+    container_name: research-ui
+    restart: unless-stopped
+    depends_on:
+      - agent
+    ports:
+      - "9000:9000"          # Chainlit UI — the public entry point
+    environment:
+      # Reach the FastAPI agent over the compose network
+      RESEARCH_API_URL: "http://agent:8000/research"
+      PYTHONUNBUFFERED: "1"
 
 networks:
   default:
