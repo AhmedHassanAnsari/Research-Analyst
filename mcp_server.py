@@ -1,18 +1,27 @@
-import html
-import re
-import sys
-from urllib.parse import quote_plus
+import os
 
-import requests
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from tavily import TavilyClient
 
-server = FastMCP(
-    "ResearchMCP",
-    instructions="A simple MCP server that can search the web for a topic and return useful results.",
-)
+load_dotenv()
+
+mcp = FastMCP("ResearchMCP")
+
+_tavily: TavilyClient | None = None
 
 
-@server.tool()
+def _client() -> TavilyClient:
+    global _tavily
+    if _tavily is None:
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+            raise RuntimeError("TAVILY_API_KEY is not set.")
+        _tavily = TavilyClient(api_key=api_key)
+    return _tavily
+
+
+@mcp.tool()
 def search_web(topic: str) -> str:
     """Search the web for a topic and return a short list of results.
 
@@ -23,25 +32,26 @@ def search_web(topic: str) -> str:
     if not topic:
         return "Please provide a topic to search for."
 
-    search_url = f"https://duckduckgo.com/html/?q={quote_plus(topic)}"
-    response = requests.get(
-        search_url,
-        headers={"User-Agent": "Mozilla/5.0"},
-        timeout=10,
-    )
-    response.raise_for_status()
+    response = _client().search(query=topic, max_results=3, include_answer=True)
+    results = response.get("results", [])
 
-    matches = re.findall(r'<a rel="nofollow" class="result__a" href="(.*?)">(.*?)</a>', response.text, re.S)
-    results: list[str] = []
-    for href, title in matches[:5]:
-        cleaned_title = re.sub(r"<.*?>", "", title)
-        cleaned_title = html.unescape(cleaned_title).strip()
-        if cleaned_title:
-            results.append(f"{cleaned_title} -> {href}")
+    lines: list[str] = []
+    for item in results:
+        title = (item.get("title") or "").strip()
+        url = (item.get("url") or "").strip()
+        content = (item.get("content") or "").strip()
+        if not title and not content:
+            continue
+        lines.append(f"{title} -> {url}\n{content}")
 
-    if not results:
+    if not lines:
         return f"No search results were found for '{topic}'."
 
-    return "\n".join(results)
+    answer = (response.get("answer") or "").strip()
+    body = "\n\n".join(lines)
+    if answer:
+        return f"Summary: {answer}\n\n{body}"
+    return body
 
-server=server.streamable_http_app();
+
+app = mcp.streamable_http_app()

@@ -1,0 +1,28 @@
+# ── Stage 1: build / install dependencies ────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock ./
+
+RUN uv sync --no-dev --frozen
+
+# ── Stage 2: lean runtime image ───────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy MCP server source
+COPY mcp_server.py .
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+# MCP server listens on port 8001
+EXPOSE 8001
+
+CMD ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8001"]

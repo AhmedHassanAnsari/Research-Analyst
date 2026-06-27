@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+
+  # ── MCP Research Server ────────────────────────────────────────────────────
+  mcp-server:
+    image: ghcr.io/ahmedhassanansari/research-analyst-server:latest
+    container_name: research-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8001:8001"          # MCP server HTTP endpoint
+    environment:
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/mcp')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Research Agent ─────────────────────────────────────────────────────────
+  agent:
+    image: ghcr.io/ahmedhassanansari/research-analyst-agent:latest
+    container_name: research-agent
+    restart: unless-stopped
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    ports:
+      - "8000:8000"          # FastAPI endpoint
+    environment:
+      # Runtime secrets – supply via a .env file or docker compose --env-file
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # Point agent at the MCP server running in the same compose network
+      MCP_SERVER_URL: "http://mcp-server:8001/mcp"
+      PYTHONUNBUFFERED: "1"
+    # Mount .env file if it exists locally (commented out for prod; use secrets instead)
+    # env_file:
+    #   - .env
+
+networks:
+  default:
+    name: research-analyst-net

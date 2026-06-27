@@ -1,0 +1,17 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.claude
+multi-stage-dockerfile
+test.py
+Dockerfile*
+.dockerignore
+README.md

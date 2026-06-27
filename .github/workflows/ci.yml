@@ -1,51 +1,140 @@
-name: CI
+name: CI – Build & Push Docker images to GHCR
 
 on:
   push:
+    branches: [main, master]
     paths:
-      - 'Agent.py'
+      - Agent.py          # rebuild agent image when Agent.py changes
+      - api.py            # rebuild agent image when the API entrypoint changes
+      - mcp_server.py     # rebuild server image when mcp_server.py changes
+      - Dockerfile.agent
+      - Dockerfile.server
+      - pyproject.toml
+      - uv.lock
   pull_request:
+    branches: [main, master]
     paths:
-      - 'Agent.py'
+      - Agent.py
+      - api.py
+      - mcp_server.py
+      - Dockerfile.agent
+      - Dockerfile.server
+      - pyproject.toml
+      - uv.lock
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
 
 jobs:
-  build:
+  # ── Detect which files changed ──────────────────────────────────────────────
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      agent: ${{ steps.filter.outputs.agent }}
+      server: ${{ steps.filter.outputs.server }}
     steps:
-      - name: Checkout repository
+      - uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            agent:
+              - 'Agent.py'
+              - 'api.py'
+              - 'Dockerfile.agent'
+              - 'pyproject.toml'
+              - 'uv.lock'
+            server:
+              - 'mcp_server.py'
+              - 'Dockerfile.server'
+              - 'pyproject.toml'
+              - 'uv.lock'
+
+  # ── Build & push research-analyst-agent ─────────────────────────────────────
+  build-agent:
+    needs: changes
+    if: ${{ needs.changes.outputs.agent == 'true' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          python-version: '3.11'
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Extract metadata for agent image
+        id: meta-agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/research-analyst-agent
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
-      - name: Add uv to PATH
-        run: echo "${HOME}/.local/bin" >> $GITHUB_PATH
+      - name: Build and push agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.agent
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-agent.outputs.tags }}
+          labels: ${{ steps.meta-agent.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Install project dependencies
-        run: uv sync --no-dev
-        env:
-          UV_SYSTEM_PYTHON: true
+  # ── Build & push research-analyst-server ────────────────────────────────────
+  build-server:
+    needs: changes
+    if: ${{ needs.changes.outputs.server == 'true' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
-      - name: Run tests (if any)
-        run: |
-          if [ -f "pyproject.toml" ]; then
-            uv run pytest || echo "No tests found"
-          else
-            echo "No pyproject.toml, skipping tests"
-          fi
-        continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Build Docker image
-        if: success()
-        run: |
-          if [ -f "Dockerfile" ]; then
-            docker build -t research-analyst:latest .
-          else
-            echo "Dockerfile not found – skipping image build."
-          fi
-        continue-on-error: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for server image
+        id: meta-server
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/research-analyst-server
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+
+      - name: Build and push server image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.server
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-server.outputs.tags }}
+          labels: ${{ steps.meta-server.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
