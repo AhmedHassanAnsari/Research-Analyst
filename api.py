@@ -21,8 +21,14 @@ app.add_middleware(
 
 class ResearchRequest(BaseModel):
     query: str
+    user_id: str | None = None
+    session_id: str | None = None
 
 
 @app.post("/research")
 async def research(request: ResearchRequest) -> Output:
-    return await run_research(request.query)
+    return await run_research(
+        request.query,
+        user_id=request.user_id,
+        session_id=request.session_id,
+    )

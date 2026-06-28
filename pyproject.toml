@@ -10,9 +10,11 @@ dependencies = [
     "requests>=2.32.0",
     "langfuse",
     "openinference-instrumentation-openai-agents",
-    "openai-agents>=0.17.7",
+    "openai-agents[sqlalchemy]>=0.17.7",
     "httpx>=0.28.1",
     "tavily-python>=0.7.26",
     "fastapi[standard]>=0.138.1",
     "chainlit>=2.11.1",
+    "asyncpg",
+    "aiosqlite>=0.22.1",
 ]

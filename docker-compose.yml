@@ -2,6 +2,26 @@
 
 services:
 
+  # ── Postgres (session memory + future Chainlit data layer) ─────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: research-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-research}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-research}
+      POSTGRES_DB: ${POSTGRES_DB:-research}
+    ports:
+      - "5432:5432"          # published for local-host testing of the agent
+    volumes:
+      - postgres-data:/var/lib/postgresql/data   # survives container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-research} -d ${POSTGRES_DB:-research}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   # ── MCP Research Server ────────────────────────────────────────────────────
   mcp-server:
     image: ghcr.io/ahmedhassanansari/research-analyst-server:latest
@@ -27,6 +47,8 @@ services:
     depends_on:
       mcp-server:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     expose:
       - "8000"               # FastAPI endpoint — internal only, reached via the UI
     environment:
@@ -37,6 +59,10 @@ services:
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
       # Point agent at the MCP server running in the same compose network
       MCP_SERVER_URL: "http://mcp-server:8001/mcp"
+      # Async Postgres URL for SQLAlchemySession short-term memory.
+      # Named SESSION_DB_URL (not DATABASE_URL) so it doesn't collide with
+      # Chainlit's reserved DATABASE_URL, which expects a raw postgresql:// DSN.
+      SESSION_DB_URL: "postgresql+asyncpg://${POSTGRES_USER:-research}:${POSTGRES_PASSWORD:-research}@postgres:5432/${POSTGRES_DB:-research}"
       PYTHONUNBUFFERED: "1"
     # Mount .env file if it exists locally (commented out for prod; use secrets instead)
     # env_file:
@@ -54,7 +80,12 @@ services:
     environment:
       # Reach the FastAPI agent over the compose network
       RESEARCH_API_URL: "http://agent:8000/research"
+      # Default Langfuse user id attached to every conversation
+      DEFAULT_USER_ID: ${DEFAULT_USER_ID:-Ahmed}
       PYTHONUNBUFFERED: "1"
+
+volumes:
+  postgres-data:                 # named volume so session history persists across restarts
 
 networks:
   default:

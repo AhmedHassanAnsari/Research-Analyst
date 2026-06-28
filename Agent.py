@@ -8,6 +8,8 @@ import httpx
 load_dotenv()
 
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
+from agents.extensions.memory import SQLAlchemySession
+from sqlalchemy.ext.asyncio import create_async_engine
 from langfuse import get_client, observe, propagate_attributes
 from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
@@ -40,14 +42,82 @@ class Output(BaseModel):
     cites: Optional[str]
 
 
+# ── Short-term memory: one async engine reused for every SQLAlchemySession ─────
+# SESSION_DB_URL points at Postgres in compose; falls back to a local SQLite file
+# so `python Agent.py` still works outside Docker.
+SESSION_DB_URL = os.getenv("SESSION_DB_URL", "sqlite+aiosqlite:///./sessions.db")
+session_engine = create_async_engine(SESSION_DB_URL)
+
+# Compaction rule: once a conversation exceeds MAX_TURNS user turns, the oldest
+# SUMMARIZE_TURNS are collapsed into a single summary item to bound context/cost.
+MAX_TURNS = 15
+SUMMARIZE_TURNS = 10
+
+
+async def _maybe_compact(session: "SQLAlchemySession") -> None:
+    """If the conversation exceeds MAX_TURNS user turns, summarize the oldest
+    SUMMARIZE_TURNS and replace them with one summary item, keeping the rest."""
+    items = await session.get_items()
+
+    # Index each item by which user turn it belongs to (a user message opens a turn).
+    user_turn_count = sum(1 for it in items if it.get("role") == "user")
+    if user_turn_count <= MAX_TURNS:
+        return
+
+    # Find the item index where the (SUMMARIZE_TURNS+1)-th user turn starts; everything
+    # before it is the "old" slice we summarize, everything from it onward is kept.
+    seen_users = 0
+    split_at = len(items)
+    for idx, it in enumerate(items):
+        if it.get("role") == "user":
+            seen_users += 1
+            if seen_users == SUMMARIZE_TURNS + 1:
+                split_at = idx
+                break
+
+    old_items = items[:split_at]
+    kept_items = items[split_at:]
+    if not old_items:
+        return
+
+    summarizer = Agent(
+        name="Summarizer",
+        instructions=(
+            "You compress earlier conversation history. Produce a concise factual "
+            "summary capturing the user's questions, key findings, and any "
+            "decisions or context needed to answer future follow-ups. No preamble."
+        ),
+        model=model,
+    )
+    convo_text = "\n".join(
+        f"{it.get('role', 'unknown')}: {it.get('content', '')}" for it in old_items
+    )
+    summary_result = await Runner.run(
+        summarizer, f"Summarize this earlier conversation:\n\n{convo_text}"
+    )
+    summary_item = {
+        "role": "user",
+        "content": f"[Summary of earlier conversation]\n{summary_result.final_output}",
+    }
+
+    await session.clear_session()
+    await session.add_items([summary_item] + kept_items)
+
 
 from langfuse import get_client, observe, propagate_attributes
 
 langfuse = get_client()
 
 @observe(name="mcp_research")
-async def run_research(topic: str) -> Output:
-   
+async def run_research(
+    topic: str,
+    user_id: str | None = None,
+    session_id: str | None = None,
+) -> Output:
+
+      # Bind the Chainlit-provided user/session ids onto this trace so every
+      # message in one conversation thread groups under the same Langfuse session.
+      with propagate_attributes(user_id=user_id, session_id=session_id):
 
         params = MCPServerStreamableHttpParams(
           url=os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8001/mcp"),
@@ -72,10 +142,19 @@ async def run_research(topic: str) -> Output:
             mcp_servers=[mcp_client],
             handoffs=[display_agent],
          )
-        
+
+         # Per-conversation short-term memory keyed by the Chainlit session id.
+         # Without a session id (e.g. local main()) we skip persistence.
+         session = (
+            SQLAlchemySession(session_id, engine=session_engine, create_tables=True)
+            if session_id
+            else None
+         )
+         if session is not None:
+            await _maybe_compact(session)
 
          try:
-            result = await Runner.run(agent, f"Research on: {topic}")
+            result = await Runner.run(agent, f"Research on: {topic}", session=session)
             final = result.final_output
             langfuse.update_current_span(output={"result": str(final)})
             return final
