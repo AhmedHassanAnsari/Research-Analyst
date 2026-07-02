@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from typing import Optional
 import httpx
 
+
+from langfuse import get_client, observe, propagate_attributes
 load_dotenv()
 
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
@@ -24,7 +26,7 @@ from agents import (
     handoff,
 )
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY1")
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 external_client: AsyncOpenAI = AsyncOpenAI(
@@ -38,8 +40,9 @@ model: OpenAIChatCompletionsModel = OpenAIChatCompletionsModel(
 )
 
 class Output(BaseModel):
-    key_insights: list[str]
-    cites: Optional[str]
+    key_insights: list[str] = []
+    cites: Optional[str] = None
+    message: Optional[str] = None
 
 
 # ── Short-term memory: one async engine reused for every SQLAlchemySession ─────
@@ -104,8 +107,6 @@ async def _maybe_compact(session: "SQLAlchemySession") -> None:
     await session.add_items([summary_item] + kept_items)
 
 
-from langfuse import get_client, observe, propagate_attributes
-
 langfuse = get_client()
 
 @observe(name="mcp_research")
@@ -127,6 +128,7 @@ async def run_research(
 
          researcher_prompt = langfuse.get_prompt("Researcher agent")
          display_prompt = langfuse.get_prompt("Display")
+         orchestrator_prompt = langfuse.get_prompt("Orchestrator agent")
 
          display_agent = Agent(
             name="Display",
@@ -142,9 +144,15 @@ async def run_research(
             mcp_servers=[mcp_client],
             handoffs=[display_agent],
          )
+         orchestrator_agent = Agent(
+            name="Orchestrator",
+            instructions=orchestrator_prompt.compile(),
+            model=model,
+            handoffs=[agent],
+         )
 
          # Per-conversation short-term memory keyed by the Chainlit session id.
-         # Without a session id (e.g. local main()) we skip persistence.
+         # Without a session id we skip persistence.
          session = (
             SQLAlchemySession(session_id, engine=session_engine, create_tables=True)
             if session_id
@@ -154,8 +162,10 @@ async def run_research(
             await _maybe_compact(session)
 
          try:
-            result = await Runner.run(agent, f"Research on: {topic}", session=session)
+            result = await Runner.run(orchestrator_agent, f"User_input: {topic}", session=session)
             final = result.final_output
+            if not isinstance(final, Output):
+                final = Output(message=str(final))
             langfuse.update_current_span(output={"result": str(final)})
             return final
 
@@ -168,9 +178,6 @@ async def run_research(
 
 
 async def main():
-    topic = "which countries are hosting AI research labs?"
-    result = await run_research(topic)
-    print(result)
     langfuse.flush()
 
 
