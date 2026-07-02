@@ -2,7 +2,7 @@
 
 services:
 
-  # ── Postgres (session memory + future Chainlit data layer) ─────────────────
+  # ── Postgres (session memory + Chainlit data layer) ────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: research-postgres
@@ -15,6 +15,7 @@ services:
       - "5432:5432"          # published for local-host testing of the agent
     volumes:
       - postgres-data:/var/lib/postgresql/data   # survives container restarts
+      - ./db/init:/docker-entrypoint-initdb.d:ro # Chainlit data-layer schema, applied on first init
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-research} -d ${POSTGRES_DB:-research}"]
       interval: 10s
@@ -74,7 +75,10 @@ services:
     container_name: research-ui
     restart: unless-stopped
     depends_on:
-      - agent
+      agent:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     ports:
       - "9000:9000"          # Chainlit UI — the public entry point
     environment:
@@ -82,6 +86,18 @@ services:
       RESEARCH_API_URL: "http://agent:8000/research"
       # Default Langfuse user id attached to every conversation
       DEFAULT_USER_ID: ${DEFAULT_USER_ID:-Ahmed}
+      # Chainlit data layer (thread persistence). RAW postgresql:// scheme —
+      # ChainlitDataLayer connects via raw asyncpg and rejects +asyncpg.
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-research}:${POSTGRES_PASSWORD:-research}@postgres:5432/${POSTGRES_DB:-research}"
+      # Signs the auth session cookie; required for OAuth login.
+      CHAINLIT_AUTH_SECRET: ${CHAINLIT_AUTH_SECRET}
+      # Public URL so OAuth callback URLs resolve correctly.
+      CHAINLIT_URL: ${CHAINLIT_URL:-http://localhost:9000}
+      # OAuth providers (Google + GitHub). Presence of these enables the login screen.
+      OAUTH_GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID:-}
+      OAUTH_GOOGLE_CLIENT_SECRET: ${OAUTH_GOOGLE_CLIENT_SECRET:-}
+      OAUTH_GITHUB_CLIENT_ID: ${OAUTH_GITHUB_CLIENT_ID:-}
+      OAUTH_GITHUB_CLIENT_SECRET: ${OAUTH_GITHUB_CLIENT_SECRET:-}
       PYTHONUNBUFFERED: "1"
 
 volumes:
