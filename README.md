@@ -135,7 +135,9 @@ Scorers: an in-code LLM judge (1–5 against a rubric) and a `has_citations` che
 
 ## Deployment
 
-`.github/workflows/ci.yml` builds and pushes three images to GHCR — `research-analyst-agent`, `research-analyst-server`, and the UI image — each gated on a path filter so only the changed component rebuilds. Configuration is fully environment-driven, so production deployment (e.g. Kubernetes) is a matter of supplying secrets and the public callback URLs per environment.
+**Images (CI → GHCR).** `.github/workflows/ci.yml` builds and pushes three images to GitHub Container Registry (GHCR) — `research-analyst-agent`, `research-analyst-server`, and the UI image — each gated on a path filter so only the changed component rebuilds.
+
+**Cluster (Helm + Kubernetes on KIND).** Deployment targets a local [KIND](https://kind.sigs.k8s.io) (Kubernetes-in-Docker) cluster, with the four services deployed via Helm charts that pull the images published to GHCR. Configuration is fully environment-driven — secrets (Gemini/Tavily/Langfuse keys, Postgres credentials, `CHAINLIT_AUTH_SECRET`, OAuth client credentials) and the public OAuth callback URLs are supplied per environment through Helm values / Kubernetes secrets, so no code changes are needed to move between local KIND and a production cluster.
 
 ## Project layout
 
